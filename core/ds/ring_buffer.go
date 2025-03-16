@@ -19,21 +19,21 @@ func InitRingBuffer(size int) *RingBuffer {
 	}
 }
 
-func (r *RingBuffer) insertDataToRingBuffer(data interface{}) (bool, string) {
+func (r *RingBuffer) InsertDataToRingBuffer(data interface{}) (bool, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.count == r.size {
-		return false, "Buffer is full!!!"
+		return false, r.count
 	}
 
 	r.data[r.tail] = data
 	r.tail = (r.tail + 1) % r.size
 	r.count++
-	return true, "Data added to buffer"
+	return true, r.count
 }
 
-func (r *RingBuffer) getDataFromRingBuffer() (interface{}, bool) {
+func (r *RingBuffer) GetDataFromRingBuffer() (interface{}, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -45,4 +45,11 @@ func (r *RingBuffer) getDataFromRingBuffer() (interface{}, bool) {
 	r.head = (r.head + 1) % r.size
 	r.count--
 	return data, true
+}
+
+func (r *RingBuffer) GetBufferSize() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.count
 }
