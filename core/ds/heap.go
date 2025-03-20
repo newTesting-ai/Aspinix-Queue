@@ -18,8 +18,10 @@ type Queue struct {
 type QueueHeap []*Queue
 
 type Heap struct {
-	heap  QueueHeap
-	count int
+	heap          QueueHeap
+	reserved      QueueHeap
+	count         int
+	reservedCount int
 }
 
 func InitHeap() *Heap {
@@ -27,14 +29,25 @@ func InitHeap() *Heap {
 	queue := Queue{
 		id:      0,
 		buffer:  buffer,
-		size:    100,
+		size:    4,
+		usage:   0.0,
+		enabled: true,
+		dlq:     false,
+	}
+	reservedBuffer := InitRingBuffer(100)
+	reservedQueue := Queue{
+		id:      0,
+		buffer:  reservedBuffer,
+		size:    4,
 		usage:   0.0,
 		enabled: true,
 		dlq:     false,
 	}
 	localHeap := &Heap{
-		heap:  []*Queue{&queue},
-		count: 0,
+		heap:          []*Queue{&queue},
+		reserved:      []*Queue{&reservedQueue},
+		count:         0,
+		reservedCount: 0,
 	}
 	heap.Init(&localHeap.heap)
 	return localHeap
@@ -54,7 +67,7 @@ func (q *Queue) addDataToSpecificQueue(data interface{}) (bool, float32) {
 
 	flag, count := q.buffer.InsertDataToRingBuffer(data)
 	if flag {
-		usage := float32(count) / float32(q.size)
+		usage := float32(count) * 100.0 / float32(q.size)
 		return true, usage
 	}
 	return false, 0.0
@@ -76,19 +89,34 @@ func (h *QueueHeap) Pop() interface{} {
 	return queue
 }
 
-func (h *Heap) addNewQueue() {
-	n := len(h.heap)
-	buffer := InitRingBuffer(100)
-	queue := &Queue{
-		id:      n,
-		buffer:  buffer,
-		size:    100,
-		usage:   0.0,
-		enabled: true,
-		dlq:     false,
+func (h *Heap) addNewQueue(priority bool) {
+	if priority {
+		n := len(h.reserved)
+		buffer := InitRingBuffer(100)
+		queue := &Queue{
+			id:      n,
+			buffer:  buffer,
+			size:    4,
+			usage:   0.0,
+			enabled: true,
+			dlq:     false,
+		}
+		heap.Push(&h.reserved, queue)
+		h.reservedCount++
+	} else {
+		n := len(h.heap)
+		buffer := InitRingBuffer(100)
+		queue := &Queue{
+			id:      n,
+			buffer:  buffer,
+			size:    4,
+			usage:   0.0,
+			enabled: true,
+			dlq:     false,
+		}
+		heap.Push(&h.heap, queue)
+		h.count++
 	}
-	heap.Push(&h.heap, queue)
-	h.count++
 }
 func (h *Heap) removeQueue() bool {
 	if len(h.heap) == 0 {
@@ -99,20 +127,73 @@ func (h *Heap) removeQueue() bool {
 	return true
 }
 
-func (q *Heap) updateQueueUsage(queue *Queue, newUsage float32) {
-	heap.Remove(&q.heap, queue.id) // Remove from heap
-	queue.usage = newUsage         // Update value
-	heap.Push(&q.heap, queue)      // Reinsert into heap
+func (q *Heap) updateQueueUsage(queue *Queue, newUsage float32, priority bool) {
+	if priority {
+		heap.Remove(&q.reserved, queue.id) // Remove from heap
+		queue.usage = newUsage             // Update value
+		heap.Push(&q.reserved, queue)      // Reinsert into heap
+	} else {
+		heap.Remove(&q.heap, queue.id) // Remove from heap
+		queue.usage = newUsage         // Update value
+		heap.Push(&q.heap, queue)      // Reinsert into heap
+	}
 }
 
-func (h *Heap) AddData(data interface{}) bool {
-	if h.heap[0].usage > 75.0 {
-		h.addNewQueue()
+func (h *Heap) handleDataAddition(heap *Queue, data interface{}, priority bool) bool {
+	if heap.usage > 75.0 {
+		h.addNewQueue(priority)
+		return h.AddData(data, priority)
 	}
-	flag, usage := h.heap[0].addDataToSpecificQueue(data)
+	flag, usage := heap.addDataToSpecificQueue(data)
 	if flag {
-		h.updateQueueUsage(h.heap[0], usage)
+		h.updateQueueUsage(heap, usage, priority)
 		return true
 	}
 	return false
+}
+
+func (h *Heap) AddData(data interface{}, priority bool) bool {
+	var flag bool
+	if priority {
+		flag = h.handleDataAddition(h.reserved[0], data, priority)
+	} else {
+		flag = h.handleDataAddition(h.heap[0], data, priority)
+	}
+	return flag
+}
+
+func (q *Heap) GetUsages() ([]map[string]interface{}, float32) {
+	var result []map[string]interface{}
+	var usage float32
+	var total float32
+
+	for _, queue := range q.heap {
+		queueMap := map[string]interface{}{
+			"id":      queue.id, // Assuming buffer can be represented as an array
+			"usage":   queue.usage,
+			"size":    queue.size,
+			"enabled": queue.enabled,
+			"dlq":     queue.dlq,
+		}
+		result = append(result, queueMap)
+		usage += queue.usage * float32(queue.size)
+		total += float32(queue.size)
+	}
+
+	for _, queue := range q.reserved {
+		queueMap := map[string]interface{}{
+			"id":      queue.id, // Assuming buffer can be represented as an array
+			"usage":   queue.usage,
+			"size":    queue.size,
+			"enabled": queue.enabled,
+			"dlq":     queue.dlq,
+		}
+		result = append(result, queueMap)
+		usage += queue.usage * float32(queue.size)
+		total += float32(queue.size)
+	}
+
+	usage = usage / total
+
+	return result, usage
 }
